@@ -1,4 +1,4 @@
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 import requests
 import os
@@ -19,55 +19,68 @@ class YougileClient:
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
-        print(f"YougileClient инициализирован с ключом: {api_key[:10]}...")  # Логируем начало ключа
     
     def get_projects(self):
         """Получить список всех проектов"""
         try:
-            url = f"{YOUGILE_BASE_URL}/projects"
-            print(f"Делаем запрос к: {url}")
-            print(f"Заголовки: {self.headers}")
-            
-            response = requests.get(url, headers=self.headers, timeout=10)
-            
-            print(f"Статус код: {response.status_code}")
-            print(f"Ответ сервера: {response.text[:200]}...")  # Первые 200 символов
+            response = requests.get(
+                f"{YOUGILE_BASE_URL}/projects", 
+                headers=self.headers,
+                params={'limit': 50}
+            )
+            print("Статус код проектов:", response.status_code)
             
             if response.status_code == 200:
                 data = response.json()
-                projects = data.get('content', [])
-                print(f"Найдено проектов: {len(projects)}")
-                return projects
+                print("Найдено проектов:", len(data.get('content', [])))
+                return data.get('content', [])
             else:
-                print(f"Ошибка API! Статус: {response.status_code}")
-                print(f"Полный ответ: {response.text}")
+                print(f"Ошибка API: {response.status_code}")
+                print("Ответ:", response.text)
                 return []
                 
-        except requests.exceptions.RequestException as e:
-            print(f"Ошибка сети: {e}")
-            return []
         except Exception as e:
-            print(f"Общая ошибка: {e}")
+            print(f"Ошибка при получении проектов: {e}")
+            return []
+    
+    def get_columns(self, project_id):
+        """Получить колонки проекта"""
+        try:
+            response = requests.get(
+                f"{YOUGILE_BASE_URL}/projects/{project_id}/columns", 
+                headers=self.headers
+            )
+            if response.status_code == 200:
+                return response.json().get('content', [])
+            return []
+        except:
+            return []
+    
+    def get_tasks(self, project_id):
+        """Получить все задачи проекта"""
+        try:
+            response = requests.get(
+                f"{YOUGILE_BASE_URL}/projects/{project_id}/tasks", 
+                headers=self.headers,
+                params={'limit': 100}
+            )
+            if response.status_code == 200:
+                return response.json().get('content', [])
+            return []
+        except:
             return []
 
 # Создаем клиент Yougile
 yougile_client = YougileClient(YOUGILE_API_KEY)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start"""
-    await update.message.reply_text("🔄 Запрашиваю проекты из Yougile...")
+    """Команда /start - показывает список проектов"""
+    print("Получение проектов из Yougile...")
     
     projects = yougile_client.get_projects()
     
     if not projects:
-        await update.message.reply_text(
-            "❌ Не удалось получить проекты.\n\n"
-            "Возможные причины:\n"
-            "• Неверный API-ключ\n"
-            "• Ключ не активирован\n"
-            "• Нет доступа к API\n"
-            "• Нет созданных проектов в Yougile"
-        )
+        await update.message.reply_text("Проекты не найдены или ошибка доступа к Yougile")
         return
     
     # Создаем кнопки с названиями проектов
@@ -78,44 +91,70 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['projects'] = {project['title']: project['id'] for project in projects}
     
     await update.message.reply_text(
-        "✅ Проекты получены! Выберите проект:",
+        "Выберите проект:",
         reply_markup=reply_markup
     )
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстовых сообщений"""
-    await update.message.reply_text(f"Вы выбрали: {update.message.text}")
+async def handle_project_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик выбора проекта"""
+    project_name = update.message.text
+    projects = context.user_data.get('projects', {})
+    
+    if project_name not in projects:
+        await update.message.reply_text("Проект не найден")
+        return
+    
+    project_id = projects[project_name]
+    await update.message.reply_text(f"Загружаю задачи проекта '{project_name}'...")
+    
+    # Получаем задачи и колонки
+    tasks = yougile_client.get_tasks(project_id)
+    columns = yougile_client.get_columns(project_id)
+    
+    # Создаем словарь колонок
+    columns_dict = {col['id']: col['title'] for col in columns}
+    
+    # Формируем сообщение
+    if not tasks:
+        message = "В проекте нет задач"
+    else:
+        message = f"Задачи проекта '{project_name}':\n\n"
+        for task in tasks[:10]:  # Показываем первые 10 задач
+            column_name = columns_dict.get(task.get('columnId'), 'Неизвестный статус')
+            message += f"• {task.get('title', 'Без названия')} - {column_name}\n"
+        
+        if len(tasks) > 10:
+            message += f"\n... и еще {len(tasks) - 10} задач"
+    
+    await update.message.reply_text(message)
+    
+    # Снова показываем кнопки
+    keyboard = [[project] for project in projects.keys()]
+    await update.message.reply_text(
+        "Выберите другой проект:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
 
 def main():
-    # Проверяем переменные окружения
-    print("=" * 50)
-    print("ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ:")
-    print(f"BOT_TOKEN: {'Есть' if BOT_TOKEN else 'Нет'}")
-    print(f"YOUGILE_API_KEY: {'Есть' if YOUGILE_API_KEY else 'Нет'}")
+    # Удаляем вебхук перед запуском
+    import requests
+    delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+    response = requests.get(delete_url)
+    print("Удаление вебхука:", response.json())
     
-    if YOUGILE_API_KEY:
-        print(f"Длина ключа: {len(YOUGILE_API_KEY)} символов")
-        print(f"Начало ключа: {YOUGILE_API_KEY[:10]}...")
+    # Тестируем подключение к Yougile
+    print("Проверка подключения к Yougile...")
+    test_url = f"{YOUGILE_BASE_URL}/projects"
+    test_response = requests.get(test_url, headers=yougile_client.headers)
+    print("Статус Yougile:", test_response.status_code)
+    print("Ответ Yougile:", test_response.text[:200])  # Первые 200 символов
     
-    print("=" * 50)
-    
-    # Удаляем вебхук на всякий случай
-    try:
-        delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
-        response = requests.get(delete_url)
-        print("Удаление вебхука:", response.json())
-    except Exception as e:
-        print("Ошибка при удалении вебхука:", e)
-    
-    # Создаем приложение
     app = Application.builder().token(BOT_TOKEN).build()
-    
-    # Добавляем обработчики
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_project_selection))
     
-    print("Бот запущен в режиме polling...")
-    app.run_polling(drop_pending_updates=True)
+    print("Бот запущен!")
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
