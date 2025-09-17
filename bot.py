@@ -1,11 +1,10 @@
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, CallbackContext, MessageHandler, Filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 import requests
 import os
-import json
 
 # Ключи API
-YOUGILE_API_KEY = os.getenv('YOUGILE_API_KEY')  # Добавьте в настройки Render
+YOUGILE_API_KEY = os.getenv('YOUGILE_API_KEY')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 # Базовый URL Yougile API
@@ -37,8 +36,14 @@ class YougileClient:
 # Создаем клиент Yougile
 yougile_client = YougileClient(YOUGILE_API_KEY)
 
-async def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start - показывает список проектов"""
+    # Удаляем вебхук на всякий случай
+    import requests
+    delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+    response = requests.get(delete_url)
+    print("Удаление вебхука:", response.json())
+    
     projects = yougile_client.get_projects()
     
     if not projects:
@@ -57,7 +62,7 @@ async def start(update: Update, context: CallbackContext):
         reply_markup=reply_markup
     )
 
-async def handle_project_selection(update: Update, context: CallbackContext):
+async def handle_project_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора проекта"""
     project_name = update.message.text
     projects = context.user_data.get('projects', {})
@@ -96,7 +101,7 @@ async def handle_project_selection(update: Update, context: CallbackContext):
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-async def cancel(update: Update, context: CallbackContext):
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена действия"""
     await update.message.reply_text(
         "Действие отменено",
@@ -104,6 +109,12 @@ async def cancel(update: Update, context: CallbackContext):
     )
 
 def main():
+    # Удаляем вебхук перед запуском
+    import requests
+    delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+    response = requests.get(delete_url)
+    print("Удаление вебхука:", response.json())
+    
     app = Application.builder().token(BOT_TOKEN).build()
     
     # Обработчики команд
@@ -111,9 +122,11 @@ def main():
     app.add_handler(CommandHandler("cancel", cancel))
     
     # Обработчик текстовых сообщений (выбор проекта)
-    app.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_project_selection))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_project_selection))
     
     print("Бот с интеграцией Yougile запущен!")
+    print("Токен бота:", bool(BOT_TOKEN))
+    print("Yougile ключ:", bool(YOUGILE_API_KEY))
     app.run_polling()
 
 if __name__ == '__main__':
